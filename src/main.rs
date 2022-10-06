@@ -1,4 +1,5 @@
-use chrono::{Local, Utc};
+use chrono::{Utc};
+use chrono_tz::{Asia::{Seoul, Taipei}, America::New_York, Europe::London};
 use crossterm::{
   event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
   execute,
@@ -8,9 +9,35 @@ use std::{error::Error, io, time::{Duration, Instant}};
 use tui::{
   backend::{Backend, CrosstermBackend},
   layout::{Alignment, Constraint, Direction, Layout},
-  widgets::{Block, BorderType, Borders},
-  Frame, Terminal,
+  widgets::{Block, Borders, Tabs},
+  Frame, Terminal, style::{Style, Color, Modifier}, text::{Spans, Span},
 };
+
+struct App<'a> {
+  pub titles: Vec<&'a str>,
+  pub index: usize,
+}
+
+impl<'a> App<'a> {
+  fn new() -> App<'a> {
+    App {
+      titles: vec!["Seoul", "New York", "Taipei", "London"],
+      index: 0,
+    }
+  }
+
+  pub fn next(&mut self) {
+    self.index = (self.index + 1) % self.titles.len();
+  }
+
+  pub fn previous(&mut self) {
+    if self.index > 0 {
+      self.index -= 1;
+    } else {
+      self.index = self.titles.len() - 1;
+    }
+  }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
   // setup terminal
@@ -22,7 +49,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   // create app and run it
   let tick_rate = Duration::from_millis(250);
-  let res = run_app(&mut terminal, tick_rate);
+  let app = App::new();
+  let res = run_app(&mut terminal, app, tick_rate);
 
   // restore terminal
   disable_raw_mode()?;
@@ -42,19 +70,26 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn run_app<B: Backend>(
   terminal: &mut Terminal<B>,
+  mut app: App,
   tick_rate: Duration,
 ) -> io::Result<()> {
   let mut last_tick = Instant::now();
   loop {
-    terminal.draw(|f| ui(f))?;
+    terminal.draw(|f| ui(f, &app))?;
 
     let timeout = tick_rate
       .checked_sub(last_tick.elapsed())
       .unwrap_or_else(|| Duration::from_secs(0));
     if crossterm::event::poll(timeout)? {
       if let Event::Key(key) = event::read()? {
-        if let KeyCode::Char('q') = key.code {
-          return Ok(());
+        // if let KeyCode::Char('q') = key.code {
+        //   return Ok(());
+        // }
+        match key.code {
+          KeyCode::Char('q') => return Ok(()),
+          KeyCode::Right => app.next(),
+          KeyCode::Left => app.previous(),
+          _ => {}
         }
       }
     }
@@ -64,33 +99,51 @@ fn run_app<B: Backend>(
 }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>) {
+fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
   // Wrapping block for a group
   // Just draw the block and the group on the same area and build the group
   // with at least a margin of 1
   let size = f.size();
+  let chunks = Layout::default().direction(Direction::Vertical).margin(4).constraints([Constraint::Length(3), Constraint::Min(0)].as_ref()).split(size);
 
-  // Surrounding block
-  let block = Block::default()
-    .borders(Borders::ALL)
-    .title(" Main block with round corners ")
-    .title_alignment(Alignment::Center)
-    .border_type(BorderType::Rounded);
+  let block = Block::default().style(Style::default().bg(Color::White).fg(Color::Black));
+
   f.render_widget(block, size);
 
-  let chunks = Layout::default()
-    .direction(Direction::Vertical)
-    .margin(4)
-    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-    .split(f.size());
+  let titles = app
+    .titles
+    .iter()
+    .map(|t| {
+        let (first, rest) = t.split_at(1);
+        Spans::from(vec![
+            Span::styled(first, Style::default().fg(Color::Yellow)),
+            Span::styled(rest, Style::default().fg(Color::Green)),
+        ])
+    })
+    .collect();
 
-  let local_now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-  let block = Block::default()
-    .title(format!("Local now is {}", local_now));
-  f.render_widget(block, chunks[0]);
+    let tabs = Tabs::new(titles)
+        .block(Block::default().borders(Borders::ALL).title("Tabs"))
+        .select(app.index)
+        .style(Style::default().fg(Color::Cyan))
+        .highlight_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Black),
+        );
+    f.render_widget(tabs, chunks[0]);
 
-  let utc_now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-  let block = Block::default()
-    .title(format!("Utc now is {}", utc_now));
-  f.render_widget(block, chunks[1]);
+    let kst = Utc::now().with_timezone(&Seoul).format("%Y-%m-%d %H:%M:%S").to_string();
+    let edt = Utc::now().with_timezone(&New_York).format("%Y-%m-%d %H:%M:%S").to_string();
+    let cst = Utc::now().with_timezone(&Taipei).format("%Y-%m-%d %H:%M:%S").to_string();
+    let bst = Utc::now().with_timezone(&London).format("%Y-%m-%d %H:%M:%S").to_string();
+    
+    let inner = match app.index {
+        0 => Block::default().title(kst).title_alignment(Alignment::Center),
+        1 => Block::default().title(edt).title_alignment(Alignment::Center),
+        2 => Block::default().title(cst).title_alignment(Alignment::Center),
+        3 => Block::default().title(bst).title_alignment(Alignment::Center),
+        _ => unreachable!(),
+    };
+    f.render_widget(inner, chunks[1]);
 }
