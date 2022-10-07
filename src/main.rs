@@ -9,20 +9,23 @@ use std::{error::Error, io, time::{Duration, Instant}};
 use tui::{
   backend::{Backend, CrosstermBackend},
   layout::{Alignment, Constraint, Direction, Layout},
-  widgets::{Block, Borders, Tabs},
+  widgets::{Block, Borders, Tabs, Gauge},
   Frame, Terminal, style::{Style, Color, Modifier}, text::{Spans, Span},
 };
 
 struct App<'a> {
   pub titles: Vec<&'a str>,
   pub index: usize,
+  pub progress: u16,
 }
 
 impl<'a> App<'a> {
   fn new() -> App<'a> {
+    let now = Utc::now();
     App {
       titles: vec!["Seoul", "New York", "Taipei", "London"],
       index: 0,
+      progress: 0,
     }
   }
 
@@ -37,6 +40,13 @@ impl<'a> App<'a> {
       self.index = self.titles.len() - 1;
     }
   }
+
+  pub fn on_tick(&mut self) {
+    self.progress += 1;
+    if self.progress > 100 {
+      self.progress = 0;
+    }
+  }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -48,7 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
   let mut terminal = Terminal::new(backend)?;
 
   // create app and run it
-  let tick_rate = Duration::from_millis(250);
+  let tick_rate = Duration::from_millis(10);
   let app = App::new();
   let res = run_app(&mut terminal, app, tick_rate);
 
@@ -94,6 +104,7 @@ fn run_app<B: Backend>(
       }
     }
     if last_tick.elapsed() >= tick_rate {
+      app.on_tick();
       last_tick = Instant::now();
     }
 }
@@ -132,11 +143,16 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
                 .bg(Color::Black),
         );
     f.render_widget(tabs, chunks[0]);
-
+    
     let kst = Utc::now().with_timezone(&Seoul).format("%Y-%m-%d %H:%M:%S").to_string();
     let edt = Utc::now().with_timezone(&New_York).format("%Y-%m-%d %H:%M:%S").to_string();
     let cst = Utc::now().with_timezone(&Taipei).format("%Y-%m-%d %H:%M:%S").to_string();
     let bst = Utc::now().with_timezone(&London).format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let label = format!("{}/100", app.progress);
+    let gauge_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(100)].as_ref()).split(chunks[1]);
+    let gauge = Gauge::default().block(Block::default()).percent(app.progress).label(label);
+    f.render_widget(gauge, gauge_chunks[0]);
     
     let inner = match app.index {
         0 => Block::default().title(kst).title_alignment(Alignment::Center),
