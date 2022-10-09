@@ -1,11 +1,11 @@
-use chrono::{Utc};
+use chrono::{Utc, Timelike};
 use chrono_tz::{Asia::{Seoul, Taipei}, America::New_York, Europe::London};
 use crossterm::{
   event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
   execute,
   terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::{error::Error, io, time::{Duration, Instant}};
+use std::{error::Error, io, time::{Duration, Instant}, ops::Mul};
 use tui::{
   backend::{Backend, CrosstermBackend},
   layout::{Alignment, Constraint, Direction, Layout},
@@ -16,16 +16,23 @@ use tui::{
 struct App<'a> {
   pub titles: Vec<&'a str>,
   pub index: usize,
-  pub progress: u16,
+  pub progress_milis: f64,
+  pub progress_sec: f64,
+  pub progress_min: f64
 }
 
 impl<'a> App<'a> {
   fn new() -> App<'a> {
     let now = Utc::now();
+    let milis = now.timestamp_subsec_millis() as f64;
+    let sec = now.second() as f64;
+    let min = now.minute() as f64;
     App {
       titles: vec!["Seoul", "New York", "Taipei", "London"],
       index: 0,
-      progress: 0,
+      progress_milis: milis,
+      progress_sec: sec,
+      progress_min: min,
     }
   }
 
@@ -42,9 +49,17 @@ impl<'a> App<'a> {
   }
 
   pub fn on_tick(&mut self) {
-    self.progress += 1;
-    if self.progress > 100 {
-      self.progress = 0;
+    self.progress_milis += 10.0;
+    if self.progress_milis > 999.0 {
+      self.progress_milis = 0.0;
+    }
+    self.progress_sec += 0.01;
+    if self.progress_sec > 59.0 {
+      self.progress_sec = 0.0;
+    }
+    self.progress_min += 0.000166667;
+    if self.progress_min > 59.0 {
+      self.progress_min = 0.0;
     }
   }
 }
@@ -149,10 +164,11 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     let cst = Utc::now().with_timezone(&Taipei).format("%Y-%m-%d %H:%M:%S").to_string();
     let bst = Utc::now().with_timezone(&London).format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let label = format!("{}/100", app.progress);
-    let gauge_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(100)].as_ref()).split(chunks[1]);
-    let gauge = Gauge::default().block(Block::default()).percent(app.progress).label(label);
-    f.render_widget(gauge, gauge_chunks[0]);
+    let gauge_chunks = Layout::default().direction(Direction::Vertical).constraints(
+      [Constraint::Percentage(25), Constraint::Percentage(25)].as_ref(),
+    ).split(chunks[1]);
+    let gauge_sec = Gauge::default().block(Block::default()).percent(app.progress_sec as u16);
+    f.render_widget(gauge_sec, gauge_chunks[0]);
     
     let inner = match app.index {
         0 => Block::default().title(kst).title_alignment(Alignment::Center),
