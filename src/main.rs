@@ -5,7 +5,7 @@ use crossterm::{
   execute,
   terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::{error::Error, io, time::{Duration, Instant}, ops::Mul};
+use std::{error::Error, io, time::{Duration, Instant}, ops::{Mul, Div}};
 use tui::{
   backend::{Backend, CrosstermBackend},
   layout::{Alignment, Constraint, Direction, Layout},
@@ -24,9 +24,9 @@ struct App<'a> {
 impl<'a> App<'a> {
   fn new() -> App<'a> {
     let now = Utc::now();
-    let milis = now.timestamp_subsec_millis() as f64;
-    let sec = now.second() as f64;
-    let min = now.minute() as f64;
+    let milis = (now.timestamp_subsec_millis() as f64).mul(0.1);
+    let sec = (now.second() as f64).div(60.0).mul(100.0);
+    let min = (now.minute() as f64).div(60.0).mul(100.0);
     App {
       titles: vec!["Seoul", "New York", "Taipei", "London"],
       index: 0,
@@ -50,15 +50,15 @@ impl<'a> App<'a> {
 
   pub fn on_tick(&mut self) {
     self.progress_milis += 10.0;
-    if self.progress_milis > 999.0 {
+    if self.progress_milis > 100.0 {
       self.progress_milis = 0.0;
     }
-    self.progress_sec += 0.01;
-    if self.progress_sec > 59.0 {
+    self.progress_sec += 0.167;
+    if self.progress_sec > 100.0 {
       self.progress_sec = 0.0;
     }
-    self.progress_min += 0.000166667;
-    if self.progress_min > 59.0 {
+    self.progress_min += 0.00166667;
+    if self.progress_min > 100.0 {
       self.progress_min = 0.0;
     }
   }
@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
   let mut terminal = Terminal::new(backend)?;
 
   // create app and run it
-  let tick_rate = Duration::from_millis(10);
+  let tick_rate = Duration::from_millis(100);
   let app = App::new();
   let res = run_app(&mut terminal, app, tick_rate);
 
@@ -107,9 +107,6 @@ fn run_app<B: Backend>(
       .unwrap_or_else(|| Duration::from_secs(0));
     if crossterm::event::poll(timeout)? {
       if let Event::Key(key) = event::read()? {
-        // if let KeyCode::Char('q') = key.code {
-        //   return Ok(());
-        // }
         match key.code {
           KeyCode::Char('q') => return Ok(()),
           KeyCode::Right => app.next(),
@@ -164,11 +161,15 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     let cst = Utc::now().with_timezone(&Taipei).format("%Y-%m-%d %H:%M:%S").to_string();
     let bst = Utc::now().with_timezone(&London).format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let gauge_chunks = Layout::default().direction(Direction::Vertical).constraints(
-      [Constraint::Percentage(25), Constraint::Percentage(25)].as_ref(),
+    let gauge_chunks = Layout::default().direction(Direction::Vertical).margin(3).constraints(
+      [Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)].as_ref(),
     ).split(chunks[1]);
-    let gauge_sec = Gauge::default().block(Block::default()).percent(app.progress_sec as u16);
-    f.render_widget(gauge_sec, gauge_chunks[0]);
+    let gauge_milis = Gauge::default().block(Block::default()).gauge_style(Style::default().fg(Color::Yellow)).percent(app.progress_milis as u16);
+    f.render_widget(gauge_milis, gauge_chunks[0]);
+    let gauge_sec = Gauge::default().block(Block::default()).percent(app.progress_sec.round() as u16);
+    f.render_widget(gauge_sec, gauge_chunks[1]);
+    let gauge_min = Gauge::default().block(Block::default()).percent(app.progress_min.round() as u16);
+    f.render_widget(gauge_min, gauge_chunks[2]);
     
     let inner = match app.index {
         0 => Block::default().title(kst).title_alignment(Alignment::Center),
