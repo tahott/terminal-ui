@@ -127,7 +127,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
   // Just draw the block and the group on the same area and build the group
   // with at least a margin of 1
   let size = f.size();
-  let chunks = Layout::default().direction(Direction::Vertical).margin(4).constraints([Constraint::Length(3), Constraint::Min(0)].as_ref()).split(size);
+  let chunks = Layout::default().direction(Direction::Vertical).margin(2).constraints([Constraint::Percentage(20), Constraint::Percentage(20), Constraint::Percentage(50)].as_ref()).split(size);
 
   let block = Block::default().style(Style::default().bg(Color::White).fg(Color::Black));
 
@@ -146,7 +146,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     .collect();
 
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title("Tabs"))
+        .block(Block::default().borders(Borders::ALL)
+        .title_alignment(Alignment::Center).title("Time Zone"))
         .select(app.index)
         .style(Style::default().fg(Color::Cyan))
         .highlight_style(
@@ -155,15 +156,18 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
                 .bg(Color::Black),
         );
     f.render_widget(tabs, chunks[0]);
+
+    let now = Utc::now();
     
-    let kst = Utc::now().with_timezone(&Seoul).format("%Y-%m-%d %H:%M:%S").to_string();
-    let edt = Utc::now().with_timezone(&New_York).format("%Y-%m-%d %H:%M:%S").to_string();
-    let cst = Utc::now().with_timezone(&Taipei).format("%Y-%m-%d %H:%M:%S").to_string();
-    let bst = Utc::now().with_timezone(&London).format("%Y-%m-%d %H:%M:%S").to_string();
+    let kst = now.with_timezone(&Seoul).format("%Y-%m-%d %H:%M:%S").to_string();
+    let edt = now.with_timezone(&New_York).format("%Y-%m-%d %H:%M:%S").to_string();
+    let cst = now.with_timezone(&Taipei).format("%Y-%m-%d %H:%M:%S").to_string();
+    let bst = now.with_timezone(&London).format("%Y-%m-%d %H:%M:%S").to_string();
 
     let gauge_chunks = Layout::default().direction(Direction::Vertical).margin(3).constraints(
-      [Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)].as_ref(),
-    ).split(chunks[1]);
+      [Constraint::Length(2), Constraint::Length(2), Constraint::Length(2)].as_ref(),
+    ).split(chunks[2]);
+
     let gauge_milis = Gauge::default().block(Block::default()).gauge_style(Style::default().fg(Color::Yellow)).percent(app.progress_milis as u16);
     f.render_widget(gauge_milis, gauge_chunks[0]);
     let gauge_sec = Gauge::default().block(Block::default()).percent(app.progress_sec.round() as u16);
@@ -172,7 +176,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     f.render_widget(gauge_min, gauge_chunks[2]);
     
     let inner = match app.index {
-        0 => Block::default().title(kst).title_alignment(Alignment::Center),
+        0 => Block::default().title(kst).style(Style::default().add_modifier(Modifier::BOLD)).title_alignment(Alignment::Center),
         1 => Block::default().title(edt).title_alignment(Alignment::Center),
         2 => Block::default().title(cst).title_alignment(Alignment::Center),
         3 => Block::default().title(bst).title_alignment(Alignment::Center),
