@@ -7,11 +7,16 @@ edition = "2021"
 
 [dependencies]
 ratatui = { version = "0.25.0" }
-crossterm = { version = "0.27.0" }
+crossterm = { version = "0.27.0", features = ["serde", "event-stream"] }
 chrono = "0.4"
 chrono-tz = "0.8.5"
 mongodb = "2.7"
 bson = { version = "2", features = ["chrono-0_4"] }
-tokio = { version = "1.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7.9"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
+color-eyre = "0.6.2"
+futures = "0.3.30"
+signal-hook = "0.3.17"
+log = "0.4.21"

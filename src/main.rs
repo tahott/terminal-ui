@@ -1,249 +1,171 @@
-use chrono::{Timelike, Utc};
-use chrono_tz::{
-    America::New_York,
-    Asia::{Seoul, Taipei},
-    Europe::London,
-};
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Tabs},
-    Frame, Terminal,
-};
-use std::{
-    error::Error,
-    io,
-    ops::{Div, Mul},
-    time::{Duration, Instant},
-};
+// ANCHOR: all
+mod configs;
+mod tui;
 
-struct App<'a> {
-    pub titles: Vec<&'a str>,
-    pub index: usize,
-    pub progress_milis: f64,
-    pub progress_sec: f64,
-    pub progress_min: f64,
+use std::time::Duration;
+
+use color_eyre::eyre::Result;
+use configs::config;
+use crossterm::event::KeyCode::Char;
+use mongodb::{options::ClientOptions, Client};
+use ratatui::{prelude::*, widgets::*};
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tui::Event;
+
+// App state
+struct App {
+    counter: i64,
+    should_quit: bool,
+    action_tx: UnboundedSender<Action>,
+    client: Client,
 }
 
-impl<'a> App<'a> {
-    fn new() -> App<'a> {
-        let now = Utc::now();
-        let milis = (now.timestamp_subsec_millis() as f64).mul(0.1);
-        let sec = (now.second() as f64).div(60.0).mul(100.0);
-        let min = (now.minute() as f64).div(60.0).mul(100.0);
-        App {
-            titles: vec!["Seoul", "New York", "Taipei", "London"],
-            index: 0,
-            progress_milis: milis,
-            progress_sec: sec,
-            progress_min: min,
-        }
-    }
+// App actions
+// ANCHOR: action_enum
+#[derive(Debug, Clone)]
+pub enum Action {
+    Tick,
+    Increment,
+    Decrement,
+    NetworkRequestAndThenIncrement, // new
+    NetworkRequestAndThenDecrement, // new
+    Quit,
+    Render,
+    None,
+}
+// ANCHOR_END: action_enum
 
-    pub fn next(&mut self) {
-        self.index = (self.index + 1) % self.titles.len();
-    }
-
-    pub fn previous(&mut self) {
-        if self.index > 0 {
-            self.index -= 1;
-        } else {
-            self.index = self.titles.len() - 1;
-        }
-    }
-
-    pub fn on_tick(&mut self) {
-        self.progress_milis += 10.0;
-        if self.progress_milis > 100.0 {
-            self.progress_milis = 0.0;
-        }
-        self.progress_sec += 0.167;
-        if self.progress_sec > 100.0 {
-            self.progress_sec = 0.0;
-        }
-        self.progress_min += 0.00166667;
-        if self.progress_min > 100.0 {
-            self.progress_min = 0.0;
-        }
-    }
+// App ui render function
+fn ui(f: &mut Frame, app: &mut App) {
+    let area = f.size();
+    f.render_widget(
+        Paragraph::new(format!(
+            "Press j or k to increment or decrement.\n\nCounter: {}",
+            app.counter,
+        ))
+        .block(
+            Block::default()
+                .title("ratatui async counter app")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
+        .style(Style::default().fg(Color::Cyan))
+        .alignment(Alignment::Center),
+        area,
+    );
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    // setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // create app and run it
-    let tick_rate = Duration::from_millis(100);
-    let app = App::new();
-    let res = run_app(&mut terminal, app, tick_rate);
-
-    // restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{:?}", err)
+// ANCHOR: get_action
+fn get_action(_app: &App, event: Event) -> Action {
+    match event {
+        Event::Error => Action::None,
+        Event::Tick => Action::Tick,
+        Event::Render => Action::Render,
+        Event::Key(key) => {
+            match key.code {
+                Char('j') => Action::Increment,
+                Char('k') => Action::Decrement,
+                Char('J') => Action::NetworkRequestAndThenIncrement, // new
+                Char('K') => Action::NetworkRequestAndThenDecrement, // new
+                Char('q') => Action::Quit,
+                _ => Action::None,
+            }
+        }
+        _ => Action::None,
     }
+}
+// ANCHOR_END: get_action
+
+// ANCHOR: update
+fn update(app: &mut App, action: Action) {
+    match action {
+        Action::Increment => {
+            app.counter += 1;
+        }
+        Action::Decrement => {
+            app.counter -= 1;
+        }
+        Action::NetworkRequestAndThenIncrement => {
+            let tx = app.action_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await; // simulate network request
+                tx.send(Action::Increment).unwrap();
+            });
+        }
+        Action::NetworkRequestAndThenDecrement => {
+            let tx = app.action_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await; // simulate network request
+                tx.send(Action::Decrement).unwrap();
+            });
+        }
+        Action::Quit => app.should_quit = true,
+        _ => {}
+    };
+}
+// ANCHOR_END: update
+
+// ANCHOR: run
+async fn run() -> Result<()> {
+    let (action_tx, mut action_rx) = mpsc::unbounded_channel(); // new
+
+    // ratatui terminal
+    let mut tui = tui::Tui::new()?.tick_rate(1.0).frame_rate(30.0);
+    tui.enter()?;
+
+    let client_options = ClientOptions::parse(&config().MONGO_URI).await.unwrap();
+    let client = Client::with_options(client_options).unwrap();
+
+    // application state
+    let mut app = App {
+        counter: 0,
+        should_quit: false,
+        action_tx: action_tx.clone(),
+        client,
+    };
+
+    loop {
+        let e = tui.next().await?;
+        match e {
+            tui::Event::Quit => action_tx.send(Action::Quit)?,
+            tui::Event::Tick => action_tx.send(Action::Tick)?,
+            tui::Event::Render => action_tx.send(Action::Render)?,
+            tui::Event::Key(_) => {
+                let action = get_action(&app, e);
+                action_tx.send(action.clone())?;
+            }
+            _ => {}
+        };
+
+        while let Ok(action) = action_rx.try_recv() {
+            // application update
+            update(&mut app, action.clone());
+            // render only when we receive Action::Render
+            if let Action::Render = action {
+                tui.draw(|f| {
+                    ui(f, &mut app);
+                })?;
+            }
+        }
+
+        // application exit
+        if app.should_quit {
+            break;
+        }
+    }
+    tui.exit()?;
 
     Ok(())
 }
+// ANCHOR_END: run
 
-fn run_app<B: Backend>(
-    terminal: &mut Terminal<B>,
-    mut app: App,
-    tick_rate: Duration,
-) -> io::Result<()> {
-    let mut last_tick = Instant::now();
-    loop {
-        terminal.draw(|f| ui(f, &app))?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let result = run().await;
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Right => app.next(),
-                    KeyCode::Left => app.previous(),
-                    _ => {}
-                }
-            }
-        }
-        if last_tick.elapsed() >= tick_rate {
-            app.on_tick();
-            last_tick = Instant::now();
-        }
-    }
+    result?;
+
+    Ok(())
 }
-
-fn ui(f: &mut Frame, app: &App) {
-    // Wrapping block for a group
-    // Just draw the block and the group on the same area and build the group
-    // with at least a margin of 1
-    let size = f.size();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(2)
-        .constraints(
-            [
-                Constraint::Percentage(20),
-                Constraint::Percentage(20),
-                Constraint::Percentage(50),
-            ]
-            .as_ref(),
-        )
-        .split(size);
-
-    let block = Block::default().style(Style::default().bg(Color::White).fg(Color::Black));
-
-    f.render_widget(block, size);
-
-    let titles = app
-        .titles
-        .iter()
-        .map(|t| {
-            let (first, rest) = t.split_at(1);
-            Line::from(vec![
-                Span::styled(first, Style::default().fg(Color::Yellow)),
-                Span::styled(rest, Style::default().fg(Color::Green)),
-            ])
-        })
-        .collect();
-
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .title("Time Zone")
-                .title_alignment(Alignment::Center),
-        )
-        .select(app.index)
-        .style(Style::default().fg(Color::Cyan))
-        .highlight_style(
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::Black),
-        );
-    f.render_widget(tabs, chunks[0]);
-
-    let now = Utc::now();
-
-    let kst = now
-        .with_timezone(&Seoul)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
-    let edt = now
-        .with_timezone(&New_York)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
-    let cst = now
-        .with_timezone(&Taipei)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
-    let bst = now
-        .with_timezone(&London)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
-
-    let gauge_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(3)
-        .constraints(
-            [
-                Constraint::Length(2),
-                Constraint::Length(2),
-                Constraint::Length(2),
-            ]
-            .as_ref(),
-        )
-        .split(chunks[2]);
-
-    let gauge_milis = Gauge::default()
-        .block(Block::default())
-        .gauge_style(Style::default().fg(Color::Yellow))
-        .percent(app.progress_milis as u16);
-    f.render_widget(gauge_milis, gauge_chunks[0]);
-    let gauge_sec = Gauge::default()
-        .block(Block::default())
-        .percent(app.progress_sec.round() as u16);
-    f.render_widget(gauge_sec, gauge_chunks[1]);
-    let gauge_min = Gauge::default()
-        .block(Block::default())
-        .percent(app.progress_min.round() as u16);
-    f.render_widget(gauge_min, gauge_chunks[2]);
-
-    let inner = match app.index {
-        0 => Block::default()
-            .title(kst)
-            .style(Style::default().add_modifier(Modifier::BOLD))
-            .title_alignment(Alignment::Center),
-        1 => Block::default()
-            .title(edt)
-            .title_alignment(Alignment::Center),
-        2 => Block::default()
-            .title(cst)
-            .title_alignment(Alignment::Center),
-        3 => Block::default()
-            .title(bst)
-            .title_alignment(Alignment::Center),
-        _ => unreachable!(),
-    };
-    f.render_widget(inner, chunks[1]);
-}
+// ANCHOR_END: all
