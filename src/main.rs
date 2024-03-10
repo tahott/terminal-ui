@@ -4,11 +4,14 @@ mod tui;
 
 use std::time::Duration;
 
+use chrono::{Timelike, Utc};
+use chrono_tz::Asia::Seoul;
 use color_eyre::eyre::Result;
 use configs::config;
 use crossterm::event::KeyCode::Char;
 use mongodb::{options::ClientOptions, Client};
 use ratatui::{prelude::*, widgets::*};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tui::Event;
 
@@ -18,6 +21,7 @@ struct App {
     should_quit: bool,
     action_tx: UnboundedSender<Action>,
     client: Client,
+    refresh_datetime: String,
 }
 
 // App actions
@@ -39,10 +43,11 @@ pub enum Action {
 fn ui(f: &mut Frame, app: &mut App) {
     let area = f.size();
     f.render_widget(
-        Paragraph::new(format!(
-            "Press j or k to increment or decrement.\n\nCounter: {}",
-            app.counter,
-        ))
+        Paragraph::new(Text::from(vec![
+            Line::from("Press j or k to increment or decrement."),
+            Line::from(format!("Counter: {}", app.counter)),
+            Line::from(format!("last updated {:?}", app.refresh_datetime)),
+        ]))
         .block(
             Block::default()
                 .title("ratatui async counter app")
@@ -80,6 +85,16 @@ fn get_action(_app: &App, event: Event) -> Action {
 // ANCHOR: update
 fn update(app: &mut App, action: Action) {
     match action {
+        Action::Tick => {
+            let now = Utc::now();
+
+            let kst = now
+                .with_timezone(&Seoul)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string();
+
+            app.refresh_datetime = kst;
+        }
         Action::Increment => {
             app.counter += 1;
         }
@@ -106,16 +121,30 @@ fn update(app: &mut App, action: Action) {
 }
 // ANCHOR_END: update
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Products {
+    pub name: String,
+    pub code: String,
+    pub seller_id: i32,
+}
+
 // ANCHOR: run
 async fn run() -> Result<()> {
     let (action_tx, mut action_rx) = mpsc::unbounded_channel(); // new
 
     // ratatui terminal
-    let mut tui = tui::Tui::new()?.tick_rate(1.0).frame_rate(30.0);
+    let mut tui = tui::Tui::new()?.tick_rate(0.1).frame_rate(30.0);
     tui.enter()?;
 
     let client_options = ClientOptions::parse(&config().MONGO_URI).await.unwrap();
     let client = Client::with_options(client_options).unwrap();
+
+    let now = Utc::now();
+
+    let kst = now
+        .with_timezone(&Seoul)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
 
     // application state
     let mut app = App {
@@ -123,6 +152,7 @@ async fn run() -> Result<()> {
         should_quit: false,
         action_tx: action_tx.clone(),
         client,
+        refresh_datetime: kst,
     };
 
     loop {
